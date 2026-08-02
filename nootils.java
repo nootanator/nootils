@@ -1,4 +1,3 @@
-test
 String autoBlockModule = "AutoBlock";
 String killAuraModule = "KillAura";
 String displaceModule = "Displace";
