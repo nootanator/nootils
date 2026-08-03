@@ -54,7 +54,6 @@ void onLoad() {
         util.color("&cDisabled"), "1 slot/tick", "2 slots/tick", "3 slots/tick", "4 slots/tick"});
     modules.registerButton("Practice Teams", true);
     modules.registerButton("No Pot Delay", true);
-    modules.registerDescription(util.color("&d&mnootils"));
 }
 
 void onEnable() {
