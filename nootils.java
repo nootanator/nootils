@@ -5,8 +5,11 @@ String hitSelectModule = "";
 String attackOnDamageSetting = "";
 String hitSelectSetting = "";
 String rangeSetting = "Disable block out of range";
+String rangeModule = "AutoBlock";
 boolean attackOnDamageIsSlider = false;
-boolean rangeResolved = false;
+boolean autoBlockFound = false;
+boolean killAuraFound = false;
+boolean displaceFound = false;
 int attackWindow = 5;
 
 int comboTargetId = -1;
@@ -25,8 +28,11 @@ boolean savedHitSelect = false;
 boolean overridden = false;
 boolean forcing = false;
 boolean rangeOverrideActive = false;
+boolean rangeSettingFound = false;
+boolean savedRange = true;
 int repressTicks = 0;
 
+ArrayList<String> moduleNames = new ArrayList<>();
 List<Integer> sweepQueue = new ArrayList<>();
 int lastSweepSlot = -1;
 boolean sweeping = false;
@@ -59,6 +65,8 @@ void onLoad() {
 void onEnable() {
     resolveModules();
     fullReset();
+    suppressed = false;
+    savedEnabled = false;
     resetSweep();
     activeRoster = "";
     lastScan = 0L;
@@ -67,10 +75,9 @@ void onEnable() {
     overridden = false;
     forcing = false;
     repressTicks = 0;
-    if (rangeResolved) {
-        modules.setButton(autoBlockModule, rangeSetting, true);
-    } else if (rangeOverrideActive) {
-        client.print(util.color("&cAutoBlock range setting not found."));
+    savedRange = rangeSettingFound && modules.getButton(rangeModule, rangeSetting);
+    if (rangeOverrideActive && !rangeSettingFound) {
+        client.print(util.color("&cnootils: \"" + rangeSetting + "\" not found on " + rangeModule + "."));
     }
 }
 
@@ -78,7 +85,7 @@ void onDisable() {
     restore();
     restoreDisplace();
     releaseControl();
-    if (rangeResolved && overridden) modules.setButton(autoBlockModule, rangeSetting, true);
+    if (rangeOverrideActive) writeRange(savedRange);
     overridden = false;
     clearTags();
     activeRoster = "";
@@ -98,24 +105,60 @@ void onGuiUpdate(String name, boolean opened) {
 }
 
 void resolveModules() {
+    collectModules();
+
+    String found = findModule("autoblock");
+    autoBlockFound = found.length() > 0;
+    if (autoBlockFound) autoBlockModule = found;
+
+    found = findModule("killaura");
+    killAuraFound = found.length() > 0;
+    if (killAuraFound) killAuraModule = found;
+
+    found = findModule("displace");
+    displaceFound = found.length() > 0;
+    if (displaceFound) displaceModule = found;
+
+    hitSelectModule = findModule("hitselect");
+
+    if (killAuraFound) resolveKillAuraSettings();
+    resolveRangeSetting();
+
+    if (!autoBlockFound) {
+        client.print(util.color("&cnootils: no AutoBlock module found."));
+    }
+}
+
+void collectModules() {
+    moduleNames.clear();
     Map<String, List<String>> cats = modules.getCategories();
     if (cats == null) return;
     for (List<String> names : cats.values()) {
         if (names == null) continue;
         for (String n : names) {
-            if (n == null) continue;
-            String key = n.toLowerCase().replace(" ", "");
-            if (key.contains("autoblock")) autoBlockModule = n;
-            else if (key.contains("killaura")) killAuraModule = n;
-            else if (key.contains("displace")) displaceModule = n;
-            else if (key.contains("hitselect")) hitSelectModule = n;
+            if (n != null) moduleNames.add(n);
         }
     }
-    resolveKillAuraSettings();
-    resolveRangeSetting();
+}
+
+String findModule(String key) {
+    for (int index = 0; index < moduleNames.size(); index++) {
+        if (normalize(moduleNames.get(index)).equals(key)) return moduleNames.get(index);
+    }
+    for (int index = 0; index < moduleNames.size(); index++) {
+        if (normalize(moduleNames.get(index)).contains(key)) return moduleNames.get(index);
+    }
+    return "";
+}
+
+String normalize(String name) {
+    return name.toLowerCase().replace(" ", "");
 }
 
 void resolveKillAuraSettings() {
+    attackOnDamageSetting = "";
+    hitSelectSetting = "";
+
     Map<String, Object> settings = modules.getSettings(killAuraModule);
     if (settings == null) return;
     for (String key : settings.keySet()) {
@@ -123,7 +166,8 @@ void resolveKillAuraSettings() {
         String k = key.toLowerCase().replace(" ", "");
         if (k.contains("attackondamage")) {
             attackOnDamageSetting = key;
-            attackOnDamageIsSlider = modules.getSliderMax(killAuraModule, key) > 0.0;
+            attackOnDamageIsSlider = false;
+            try { attackOnDamageIsSlider = modules.getSliderMax(killAuraModule, key) > 0.0; } catch (Exception e) { }
         } else if (k.contains("hitselect")) {
             hitSelectSetting = key;
         }
@@ -131,17 +175,35 @@ void resolveKillAuraSettings() {
 }
 
 void resolveRangeSetting() {
-    rangeResolved = false;
-    Map<String, Object> settings = modules.getSettings(autoBlockModule);
-    if (settings == null) return;
+    rangeSettingFound = false;
+    rangeModule = autoBlockModule;
+    if (findRangeSetting(autoBlockModule)) {
+        rangeSettingFound = true;
+        return;
+    }
+
+    for (int index = 0; index < moduleNames.size(); index++) {
+        String name = moduleNames.get(index);
+        if (name.equals(autoBlockModule)) continue;
+        if (findRangeSetting(name)) {
+            rangeModule = name;
+            rangeSettingFound = true;
+            return;
+        }
+    }
+}
+
+boolean findRangeSetting(String module) {
+    Map<String, Object> settings = modules.getSettings(module);
+    if (settings == null) return false;
     for (String key : settings.keySet()) {
         if (key == null) continue;
         if (key.toLowerCase().replace(" ", "").contains("outofrange")) {
             rangeSetting = key;
-            rangeResolved = true;
-            return;
+            return true;
         }
     }
+    return false;
 }
 
 boolean onPacketSent(CPacket packet) {
@@ -167,13 +229,6 @@ void onPreMotion(PlayerState state) {
         restoreDisplace();
         fullReset();
         return;
-    }
-
-    boolean displaceOn = modules.getButton(scriptName, "Displace Toggle") && modules.isEnabled(displaceModule);
-    if (displaceOn && !displaceApplied) {
-        applyDisplace();
-    } else if (!displaceOn && displaceApplied) {
-        restoreDisplace();
     }
 
     int selfHurt = self.getHurtTime();
@@ -207,7 +262,10 @@ void onPreMotion(PlayerState state) {
 
     boolean inCombo = comboHits >= (int) modules.getSlider(scriptName, "Disable in combo");
 
+    if (!autoBlockFound) return;
+
     if (inCombo && !suppressed) {
+        suspendBlockRange();
         if (modules.isEnabled(autoBlockModule)) {
             modules.disable(autoBlockModule);
             savedEnabled = true;
@@ -225,6 +283,20 @@ void onPreUpdate() {
     tickPotDelay();
     tickSweep();
     tickPracticeTeams();
+    tickDisplace();
+}
+
+void tickDisplace() {
+    if (!displaceFound) {
+        if (displaceApplied) restoreDisplace();
+        return;
+    }
+    boolean on = modules.getButton(scriptName, "Displace Toggle") && modules.isEnabled(displaceModule);
+    if (on && !displaceApplied) {
+        applyDisplace();
+    } else if (!on && displaceApplied) {
+        restoreDisplace();
+    }
 }
 
 void tickPotDelay() {
@@ -248,7 +320,7 @@ boolean isSplashPotion(ItemStack stack) {
 
 void applyDisplace() {
     displaceApplied = true;
-    if (attackOnDamageSetting.length() > 0) {
+    if (killAuraFound && attackOnDamageSetting.length() > 0) {
         if (attackOnDamageIsSlider) {
             savedAttackOnDamageSlider = modules.getSlider(killAuraModule, attackOnDamageSetting);
             double min = modules.getSliderMin(killAuraModule, attackOnDamageSetting);
@@ -258,7 +330,7 @@ void applyDisplace() {
             modules.setButton(killAuraModule, attackOnDamageSetting, false);
         }
     }
-    if (hitSelectSetting.length() > 0) {
+    if (killAuraFound && hitSelectSetting.length() > 0) {
         savedHitSelect = modules.getButton(killAuraModule, hitSelectSetting);
         modules.setButton(killAuraModule, hitSelectSetting, false);
     } else if (hitSelectModule.length() > 0) {
@@ -270,14 +342,14 @@ void applyDisplace() {
 void restoreDisplace() {
     if (!displaceApplied) return;
     displaceApplied = false;
-    if (attackOnDamageSetting.length() > 0) {
+    if (killAuraFound && attackOnDamageSetting.length() > 0) {
         if (attackOnDamageIsSlider) {
             modules.setSlider(killAuraModule, attackOnDamageSetting, savedAttackOnDamageSlider);
         } else {
             modules.setButton(killAuraModule, attackOnDamageSetting, savedAttackOnDamageButton);
         }
     }
-    if (hitSelectSetting.length() > 0) {
+    if (killAuraFound && hitSelectSetting.length() > 0) {
         modules.setButton(killAuraModule, hitSelectSetting, savedHitSelect);
     } else if (hitSelectModule.length() > 0 && savedHitSelect) {
         modules.enable(hitSelectModule);
@@ -309,23 +381,17 @@ void fullReset() {
 }
 
 void tickBlockRange() {
-    boolean on = modules.getButton(scriptName, "Allow Blocking Out Of Range");
-    if (!on) {
-        if (rangeOverrideActive) {
-            releaseControl();
-            if (rangeResolved && overridden) modules.setButton(autoBlockModule, rangeSetting, true);
-            overridden = false;
-            rangeOverrideActive = false;
-        }
+    boolean on = modules.getButton(scriptName, "Allow Blocking Out Of Range") && autoBlockFound;
+    if (!on || !modules.isEnabled(autoBlockModule)) {
+        if (rangeOverrideActive) suspendBlockRange();
+        rangeOverrideActive = on;
         return;
     }
     rangeOverrideActive = true;
-    if (!rangeResolved) return;
 
     boolean want = !keybinds.isMouseDown(0);
     if (want != overridden) {
         overridden = want;
-        modules.setButton(autoBlockModule, rangeSetting, !want);
         if (want) {
             if (keybinds.isMouseDown(1) && !guiOpen()) {
                 repressTicks = 1;
@@ -335,6 +401,8 @@ void tickBlockRange() {
             releaseControl();
         }
     }
+    writeRange(want ? false : savedRange);
+
     if (!forcing) return;
     if (!overridden || !keybinds.isMouseDown(1) || guiOpen() || !holdingSword()) {
         releaseControl();
@@ -346,6 +414,18 @@ void tickBlockRange() {
         return;
     }
     keybinds.setPressed("use", true);
+}
+
+void suspendBlockRange() {
+    releaseControl();
+    writeRange(savedRange);
+    overridden = false;
+}
+
+void writeRange(boolean value) {
+    if (!rangeSettingFound) return;
+    if (modules.getButton(rangeModule, rangeSetting) == value) return;
+    modules.setButton(rangeModule, rangeSetting, value);
 }
 
 boolean guiOpen() {
