@@ -43,6 +43,10 @@ HashSet<String> addedFriends = new HashSet<>();
 HashSet<String> addedEnemies = new HashSet<>();
 HashSet<String> restoreFriends = new HashSet<>();
 HashSet<String> restoreEnemies = new HashSet<>();
+HashMap<String, String> teamPrefixes = new HashMap<>();
+HashMap<String, Integer> teamColors = new HashMap<>();
+long lastDebug = 0L;
+boolean debugTick = false;
 Pattern namePattern = Pattern.compile("^(\\w{3,16})\\b");
 String activeRoster = "";
 long lastScan = 0L;
@@ -59,6 +63,7 @@ void onLoad() {
     modules.registerSlider("Inventory Fill", "", 2, new String[] {
         util.color("&cDisabled"), "1 slot/tick", "2 slots/tick", "3 slots/tick", "4 slots/tick"});
     modules.registerButton("Practice Teams", true);
+    modules.registerButton("Teams Debug", false);
     modules.registerButton("No Pot Delay", true);
 }
 
@@ -69,6 +74,8 @@ void onEnable() {
     savedEnabled = false;
     resetSweep();
     activeRoster = "";
+    teamPrefixes.clear();
+    teamColors.clear();
     lastScan = 0L;
     teamsActive = modules.getButton(scriptName, "Practice Teams");
     rangeOverrideActive = modules.getButton(scriptName, "Allow Blocking Out Of Range");
@@ -89,6 +96,8 @@ void onDisable() {
     overridden = false;
     clearTags();
     activeRoster = "";
+    teamPrefixes.clear();
+    teamColors.clear();
     resetSweep();
     fullReset();
 }
@@ -97,7 +106,25 @@ void onWorldJoin(Entity entity) {
     if (entity != null && entity.isUser) {
         clearTags();
         activeRoster = "";
+        teamPrefixes.clear();
+        teamColors.clear();
     }
+}
+
+boolean onPacketReceived(SPacket packet) {
+    if (packet instanceof S3E) {
+        S3E teams = (S3E) packet;
+        if (teams.name != null) {
+            if (teams.action == 1) {
+                teamPrefixes.remove(teams.name);
+                teamColors.remove(teams.name);
+            } else if (teams.action == 0 || teams.action == 2) {
+                teamPrefixes.put(teams.name, teams.prefix == null ? "" : teams.prefix);
+                teamColors.put(teams.name, teams.color);
+            }
+        }
+    }
+    return true;
 }
 
 void onGuiUpdate(String name, boolean opened) {
@@ -568,7 +595,21 @@ void tickPracticeTeams() {
     if (now - lastScan < 500L) return;
     lastScan = now;
 
-    if (!scanScoreboard()) {
+    debugTick = false;
+    if (modules.getButton(scriptName, "Teams Debug") && now - lastDebug >= 3000L) {
+        debugTick = true;
+        lastDebug = now;
+    }
+
+    boolean board = scanScoreboard();
+    if (debugTick) {
+        client.print(util.color("&7nootils: board=" + board + " team=" + teammates.size()
+            + " opp=" + opponents.size() + " teamsCached=" + teamPrefixes.size()));
+    }
+
+    if (board) scanNametags();
+
+    if (!board || (teammates.isEmpty() && opponents.isEmpty())) {
         if (activeRoster.length() > 0) {
             clearTags();
             activeRoster = "";
@@ -625,7 +666,98 @@ boolean scanScoreboard() {
         }
     }
 
-    return matchLayout && (!teammates.isEmpty() || !opponents.isEmpty());
+    return matchLayout;
+}
+
+void scanNametags() {
+    List<Entity> players = world.getPlayerEntities();
+    if (players == null || players.isEmpty()) return;
+
+    Entity player = client.getPlayer();
+    String self = player == null ? null : util.strip(player.getName());
+
+    HashMap<String, String> memberTeam = new HashMap<>();
+    Map<String, List<String>> teams = world.getTeams();
+    if (teams != null) {
+        for (String team : teams.keySet()) {
+            List<String> members = teams.get(team);
+            if (members == null) continue;
+            for (int index = 0; index < members.size(); index++) {
+                String member = members.get(index);
+                if (member != null) memberTeam.put(util.strip(member).toLowerCase(), team);
+            }
+        }
+    }
+
+    for (int index = 0; index < players.size(); index++) {
+        Entity entity = players.get(index);
+        if (entity == null || entity.isUser || !entity.isPlayer) continue;
+
+        String name = util.strip(entity.getName());
+        if (name == null || name.length() == 0) continue;
+        if (self != null && name.equalsIgnoreCase(self)) continue;
+
+        boolean known = teammates.contains(name) || opponents.contains(name);
+        boolean green = isGreenNametag(entity, name, memberTeam);
+
+        if (debugTick) {
+            String team = memberTeam.get(name.toLowerCase());
+            String prefix = team == null ? null : teamPrefixes.get(team);
+            Integer colorId = team == null ? null : teamColors.get(team);
+            client.print(util.color("&7  " + name
+                + " disp=\"" + show(entity.getDisplayName()) + "\""
+                + " team=" + team
+                + " prefix=\"" + show(prefix) + "\""
+                + " colorId=" + colorId
+                + (green ? " &agreen" : " &7-")
+                + (known ? " &7(already listed)" : "")));
+        }
+
+        if (known || !green) continue;
+
+        teammates.add(name);
+    }
+}
+
+boolean isGreenNametag(Entity entity, String name, HashMap<String, String> memberTeam) {
+    if (nameColor(entity.getDisplayName(), name) == 'a') return true;
+
+    String team = memberTeam.get(name.toLowerCase());
+    if (team == null) return false;
+
+    String prefix = teamPrefixes.get(team);
+    if (prefix != null && lastColorBefore(prefix, prefix.length()) == 'a') return true;
+
+    Integer colorId = teamColors.get(team);
+    return colorId != null && colorId.intValue() == 10;
+}
+
+String show(String text) {
+    if (text == null) return "null";
+    return text.replace(util.colorSymbol, "&");
+}
+
+char nameColor(String display, String name) {
+    if (display == null || display.length() < 2) return 0;
+
+    int end = display.indexOf(name);
+    if (end < 0) end = display.length();
+
+    return lastColorBefore(display, end);
+}
+
+char lastColorBefore(String text, int end) {
+    if (text == null) return 0;
+    if (end > text.length()) end = text.length();
+
+    char symbol = util.colorSymbol.charAt(0);
+    char found = 0;
+    for (int index = 0; index + 1 < end; index++) {
+        if (text.charAt(index) != symbol) continue;
+        char code = Character.toLowerCase(text.charAt(index + 1));
+        if ((code >= '0' && code <= '9') || (code >= 'a' && code <= 'f')) found = code;
+    }
+    return found;
 }
 
 String extractName(String line) {
