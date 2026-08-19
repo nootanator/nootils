@@ -45,8 +45,6 @@ HashSet<String> restoreFriends = new HashSet<>();
 HashSet<String> restoreEnemies = new HashSet<>();
 HashMap<String, String> teamPrefixes = new HashMap<>();
 HashMap<String, Integer> teamColors = new HashMap<>();
-long lastDebug = 0L;
-boolean debugTick = false;
 Pattern namePattern = Pattern.compile("^(\\w{3,16})\\b");
 String activeRoster = "";
 long lastScan = 0L;
@@ -63,7 +61,6 @@ void onLoad() {
     modules.registerSlider("Inventory Fill", "", 2, new String[] {
         util.color("&cDisabled"), "1 slot/tick", "2 slots/tick", "3 slots/tick", "4 slots/tick"});
     modules.registerButton("Practice Teams", true);
-    modules.registerButton("Teams Debug", false);
     modules.registerButton("No Pot Delay", true);
 }
 
@@ -77,8 +74,8 @@ void onEnable() {
     teamPrefixes.clear();
     teamColors.clear();
     lastScan = 0L;
-    teamsActive = modules.getButton(scriptName, "Practice Teams");
-    rangeOverrideActive = modules.getButton(scriptName, "Allow Blocking Out Of Range");
+    teamsActive = modules.getButton(getScriptName(), "Practice Teams");
+    rangeOverrideActive = modules.getButton(getScriptName(), "Allow Blocking Out Of Range");
     overridden = false;
     forcing = false;
     repressTicks = 0;
@@ -259,7 +256,7 @@ void onPreMotion(PlayerState state) {
     }
 
     int selfHurt = self.getHurtTime();
-    if (selfHurt > lastSelfHurt && selfHurt > 0 && modules.getButton(scriptName, "Reset When Hit")) {
+    if (selfHurt > lastSelfHurt && selfHurt > 0 && modules.getButton(getScriptName(), "Reset When Hit")) {
         dropCombo();
     }
     lastSelfHurt = selfHurt;
@@ -280,14 +277,14 @@ void onPreMotion(PlayerState state) {
 
     if (comboHits > 0) {
         idleTicks++;
-        if (idleTicks > (int) modules.getSlider(scriptName, "Reset Delay")) {
+        if (idleTicks > (int) modules.getSlider(getScriptName(), "Reset Delay")) {
             dropCombo();
         }
     }
 
     if (ticksSinceAttack < 999) ticksSinceAttack++;
 
-    boolean inCombo = comboHits >= (int) modules.getSlider(scriptName, "Disable in combo");
+    boolean inCombo = comboHits >= (int) modules.getSlider(getScriptName(), "Disable in combo");
 
     if (!autoBlockFound) return;
 
@@ -318,7 +315,7 @@ void tickDisplace() {
         if (displaceApplied) restoreDisplace();
         return;
     }
-    boolean on = modules.getButton(scriptName, "Displace Toggle") && modules.isEnabled(displaceModule);
+    boolean on = modules.getButton(getScriptName(), "Displace Toggle") && modules.isEnabled(displaceModule);
     if (on && !displaceApplied) {
         applyDisplace();
     } else if (!on && displaceApplied) {
@@ -327,7 +324,7 @@ void tickDisplace() {
 }
 
 void tickPotDelay() {
-    if (!modules.getButton(scriptName, "No Pot Delay")) return;
+    if (!modules.getButton(getScriptName(), "No Pot Delay")) return;
     if (!keybinds.isMouseDown(1) || guiOpen()) return;
 
     Entity self = client.getPlayer();
@@ -408,7 +405,7 @@ void fullReset() {
 }
 
 void tickBlockRange() {
-    boolean on = modules.getButton(scriptName, "Allow Blocking Out Of Range") && autoBlockFound;
+    boolean on = modules.getButton(getScriptName(), "Allow Blocking Out Of Range") && autoBlockFound;
     if (!on || !modules.isEnabled(autoBlockModule)) {
         if (rangeOverrideActive) suspendBlockRange();
         rangeOverrideActive = on;
@@ -518,7 +515,7 @@ void tickSweep() {
 }
 
 int sweepBurst() {
-    return (int) modules.getSlider(scriptName, "Inventory Fill");
+    return (int) modules.getSlider(getScriptName(), "Inventory Fill");
 }
 
 void resetSweep() {
@@ -580,7 +577,7 @@ int gridSlot(int relX, int relY, int x, int y, int cols, int rows, int base) {
 }
 
 void tickPracticeTeams() {
-    boolean on = modules.getButton(scriptName, "Practice Teams");
+    boolean on = modules.getButton(getScriptName(), "Practice Teams");
     if (!on) {
         if (teamsActive) {
             clearTags();
@@ -595,18 +592,7 @@ void tickPracticeTeams() {
     if (now - lastScan < 500L) return;
     lastScan = now;
 
-    debugTick = false;
-    if (modules.getButton(scriptName, "Teams Debug") && now - lastDebug >= 3000L) {
-        debugTick = true;
-        lastDebug = now;
-    }
-
     boolean board = scanScoreboard();
-    if (debugTick) {
-        client.print(util.color("&7nootils: board=" + board + " team=" + teammates.size()
-            + " opp=" + opponents.size() + " teamsCached=" + teamPrefixes.size()));
-    }
-
     if (board) scanNametags();
 
     if (!board || (teammates.isEmpty() && opponents.isEmpty())) {
@@ -698,22 +684,7 @@ void scanNametags() {
         if (self != null && name.equalsIgnoreCase(self)) continue;
 
         boolean known = teammates.contains(name) || opponents.contains(name);
-        boolean green = isGreenNametag(entity, name, memberTeam);
-
-        if (debugTick) {
-            String team = memberTeam.get(name.toLowerCase());
-            String prefix = team == null ? null : teamPrefixes.get(team);
-            Integer colorId = team == null ? null : teamColors.get(team);
-            client.print(util.color("&7  " + name
-                + " disp=\"" + show(entity.getDisplayName()) + "\""
-                + " team=" + team
-                + " prefix=\"" + show(prefix) + "\""
-                + " colorId=" + colorId
-                + (green ? " &agreen" : " &7-")
-                + (known ? " &7(already listed)" : "")));
-        }
-
-        if (known || !green) continue;
+        if (known || !isGreenNametag(entity, name, memberTeam)) continue;
 
         teammates.add(name);
     }
@@ -730,11 +701,6 @@ boolean isGreenNametag(Entity entity, String name, HashMap<String, String> membe
 
     Integer colorId = teamColors.get(team);
     return colorId != null && colorId.intValue() == 10;
-}
-
-String show(String text) {
-    if (text == null) return "null";
-    return text.replace(util.colorSymbol, "&");
 }
 
 char nameColor(String display, String name) {
